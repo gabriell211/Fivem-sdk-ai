@@ -143,7 +143,7 @@ fn safe_extract_zip(bytes: &[u8], destination: &Path) -> AppResult<()> {
     let mut archive = ZipArchive::new(Cursor::new(bytes))?;
     for index in 0..archive.len() {
         let mut file = archive.by_index(index)?;
-        let Some(relative) = file.enclosed_name().map(Path::to_path_buf) else {
+        let Some(relative) = file.enclosed_name() else {
             continue;
         };
         let output = destination.join(relative);
@@ -236,7 +236,7 @@ fn copy_server_data(bytes: &[u8], workspace_root: &Path) -> AppResult<()> {
     let mut archive = ZipArchive::new(Cursor::new(bytes))?;
     for index in 0..archive.len() {
         let mut file = archive.by_index(index)?;
-        let Some(path) = file.enclosed_name().map(Path::to_path_buf) else { continue; };
+        let Some(path) = file.enclosed_name() else { continue; };
         let mut components = path.components();
         let _archive_root = components.next();
         let Some(first) = components.next() else { continue; };
@@ -260,7 +260,7 @@ fn copy_repository_root(bytes: &[u8], destination: &Path) -> AppResult<()> {
     fs::create_dir_all(destination)?;
     for index in 0..archive.len() {
         let mut file = archive.by_index(index)?;
-        let Some(path) = file.enclosed_name().map(Path::to_path_buf) else {
+        let Some(path) = file.enclosed_name() else {
             continue;
         };
         let mut components = path.components();
