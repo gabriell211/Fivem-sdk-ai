@@ -20,7 +20,7 @@ use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     process::{Child, ChildStdin, Command},
     sync::Mutex,
-    time::{sleep, Duration, Instant},
+    time::Duration,
 };
 use url::Url;
 use walkdir::WalkDir;
@@ -107,20 +107,6 @@ impl FxServerManager {
         let _ = app.emit("fxserver://log", ServerLogEvent { stream: stream.to_owned(), line });
     }
 
-    pub async fn latest_seq(&self) -> u64 {
-        self.sequence.load(Ordering::Relaxed)
-    }
-
-    async fn lines_after(&self, seq: u64) -> Vec<StoredLog> {
-        self.logs
-            .lock()
-            .await
-            .iter()
-            .filter(|line| line.seq > seq)
-            .cloned()
-            .collect()
-    }
-
     pub async fn recent_logs(&self, limit: usize) -> Vec<Value> {
         let logs = self.logs.lock().await;
         let take = limit.clamp(1, 500);
@@ -152,28 +138,6 @@ fn write_metadata(app: &AppHandle, metadata: &RuntimeMetadata) -> AppResult<()> 
         fs::create_dir_all(parent)?;
     }
     fs::write(path, serde_json::to_vec_pretty(metadata)?)?;
-    Ok(())
-}
-
-fn safe_extract_zip(bytes: &[u8], destination: &Path) -> AppResult<()> {
-    fs::create_dir_all(destination)?;
-    let mut archive = ZipArchive::new(Cursor::new(bytes))?;
-    for index in 0..archive.len() {
-        let mut file = archive.by_index(index)?;
-        let Some(relative) = file.enclosed_name() else {
-            continue;
-        };
-        let output = destination.join(relative);
-        if file.is_dir() {
-            fs::create_dir_all(&output)?;
-            continue;
-        }
-        if let Some(parent) = output.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let mut out = fs::File::create(&output)?;
-        std::io::copy(&mut file, &mut out)?;
-    }
     Ok(())
 }
 
@@ -460,28 +424,6 @@ pub async fn send_command(manager: &FxServerManager, command: &str) -> AppResult
     running.stdin.write_all(b"\n").await?;
     running.stdin.flush().await?;
     Ok(())
-}
-
-pub async fn run_ingame_test(manager: &FxServerManager, action: &str) -> AppResult<Value> {
-    let command = match action {
-        "ping" => "sdkai_ping",
-        "snapshot" => "sdkai_snapshot",
-        _ => return Err(AppError::InvalidInput("unsupported in-game test".into())),
-    };
-    let start_seq = manager.latest_seq().await;
-    send_command(manager, command).await?;
-    let deadline = Instant::now() + Duration::from_secs(18);
-    while Instant::now() < deadline {
-        for line in manager.lines_after(start_seq).await {
-            let Some(raw) = line.line.strip_prefix("[SDKAI_EVENT]") else { continue; };
-            let Ok(event) = serde_json::from_str::<Value>(raw) else { continue; };
-            if event.get("type").and_then(Value::as_str) == Some("test_result") && event.get("action").and_then(Value::as_str) == Some(action) {
-                return Ok(event);
-            }
-        }
-        sleep(Duration::from_millis(120)).await;
-    }
-    Err(AppError::Process(format!("in-game test '{action}' timed out")))
 }
 
 pub async fn run_bridge_test(
