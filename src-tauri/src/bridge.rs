@@ -158,7 +158,6 @@ end)
 "#;
 
 const SERVER: &str = r#"local pending = {}
-local lastResultAt = {}
 local sequence = 0
 local token = GetConvar('sdkai_token', '')
 
@@ -298,9 +297,6 @@ RegisterNetEvent('sdkai:result', function(requestId, payload)
     local expected = pending[requestId]
     if not expected or expected.player ~= playerSource then return end
 
-    local now = os.time()
-    if lastResultAt[playerSource] and now - lastResultAt[playerSource] < 1 then return end
-    lastResultAt[playerSource] = now
     pending[requestId] = nil
 
     local encoded = json.encode(payload)
@@ -330,7 +326,10 @@ RegisterNetEvent('sdkai:result', function(requestId, payload)
 end)
 
 SetHttpHandler(function(request, response)
-    if request.address ~= '127.0.0.1' and request.address ~= '::1' then
+    if request.address ~= '127.0.0.1'
+        and request.address ~= '::1'
+        and request.address ~= '::ffff:127.0.0.1'
+    then
         sendJson(response, 403, { ok = false, error = 'loopback only' })
         return
     end
@@ -372,7 +371,6 @@ end)
 
 AddEventHandler('playerDropped', function()
     local playerSource = source
-    lastResultAt[playerSource] = nil
     for requestId, item in pairs(pending) do
         if item.player == playerSource then
             pending[requestId] = nil
