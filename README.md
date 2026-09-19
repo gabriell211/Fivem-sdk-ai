@@ -59,6 +59,7 @@ The AI tool surface currently contains:
 - `restart_resource`
 - `run_ingame_test`
 - `server_status`
+- `recent_logs`
 - `nui_targets`
 
 `run_ingame_test` supports structured arguments and the actions `ping`, `snapshot`, `teleport`, `spawn_vehicle`, `cleanup`, `scenario` and `screenshot`. There is deliberately no arbitrary process execution tool.
