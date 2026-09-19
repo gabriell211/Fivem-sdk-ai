@@ -1,7 +1,9 @@
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use rand::RngCore;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::{
     collections::VecDeque,
     fs,
@@ -46,6 +48,16 @@ pub struct FxServerStatus {
     pub running: bool,
     pub build: Option<String>,
     pub executable: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScreenshotEvidence {
+    pub path: String,
+    pub size: u64,
+    pub sha256: String,
+    pub mime: String,
+    pub data_url: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -497,6 +509,64 @@ pub async fn run_bridge_test(
         .error_for_status()?;
 
     Ok(response.json().await?)
+}
+
+pub async fn capture_screenshot(
+    manager: &FxServerManager,
+    workspace_path: &str,
+) -> AppResult<ScreenshotEvidence> {
+    let response = run_bridge_test(manager, "screenshot", serde_json::json!({})).await?;
+    if response.get("ok").and_then(Value::as_bool) != Some(true) {
+        return Err(AppError::Process(format!(
+            "screenshot bridge returned failure: {response}"
+        )));
+    }
+
+    let relative = response
+        .get("path")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::Process("screenshot bridge returned no path".into()))?;
+
+    let root = workspace::root(workspace_path)?;
+    let screenshots_root = root.join(".sdkai").join("screenshots");
+    let canonical_root = fs::canonicalize(&screenshots_root)?;
+    let target = root.join(relative);
+    let canonical_target = fs::canonicalize(&target)?;
+    if !canonical_target.starts_with(&canonical_root) || !canonical_target.is_file() {
+        return Err(AppError::InvalidInput(
+            "screenshot path escaped the managed screenshot directory".into(),
+        ));
+    }
+
+    let metadata = fs::metadata(&canonical_target)?;
+    if metadata.len() == 0 || metadata.len() > 10 * 1024 * 1024 {
+        return Err(AppError::InvalidInput(
+            "screenshot is empty or exceeds the 10 MiB evidence limit".into(),
+        ));
+    }
+
+    let bytes = fs::read(&canonical_target)?;
+    let sha256 = hex::encode(Sha256::digest(&bytes));
+    let mime = match canonical_target
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "png" => "image/png",
+        "webp" => "image/webp",
+        _ => "image/jpeg",
+    }
+    .to_owned();
+
+    Ok(ScreenshotEvidence {
+        path: relative.to_owned(),
+        size: metadata.len(),
+        sha256,
+        data_url: format!("data:{mime};base64,{}", BASE64_STANDARD.encode(bytes)),
+        mime,
+    })
 }
 
 pub async fn status(app: &AppHandle, manager: Option<&FxServerManager>) -> AppResult<FxServerStatus> {
