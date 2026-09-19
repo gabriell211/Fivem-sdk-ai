@@ -99,6 +99,16 @@ async fn execute_tool(app: &AppHandle, manager: &FxServerManager, workspace_path
                 .to_string())
         }
         "server_status" => Ok(serde_json::to_string(&fxserver::status(app, Some(manager)).await?)?),
+        "recent_logs" => {
+            let limit = args
+                .get("limit")
+                .and_then(Value::as_u64)
+                .unwrap_or(120)
+                .clamp(1, 500) as usize;
+            Ok(trim_tool_output(
+                serde_json::to_string(&manager.recent_logs(limit).await)?,
+            ))
+        },
         "nui_targets" => Ok(trim_tool_output(serde_json::to_string(&nui::targets().await?)?)),
         _ => Err(AppError::InvalidInput(format!("unknown AI tool: {name}"))),
     }
@@ -123,6 +133,7 @@ pub async fn run(app: AppHandle, manager: Arc<FxServerManager>, request: AgentRe
       {"type":"function","function":{"name":"restart_resource","description":"Restart one FiveM resource after editing it.","parameters":{"type":"object","properties":{"resource":{"type":"string"}},"required":["resource"],"additionalProperties":false}}},
       {"type":"function","function":{"name":"run_ingame_test","description":"Run a real test through the authenticated sdkai_bridge and connected FiveM client. Supports connectivity, player snapshots, teleport validation, vehicle spawning, cleanup, and screenshots. Use args for action-specific data.","parameters":{"type":"object","properties":{"action":{"type":"string","enum":["ping","snapshot","teleport","spawn_vehicle","cleanup","scenario","screenshot"]},"args":{"type":"object","description":"Action arguments. teleport: x,y,z,heading. spawn_vehicle: model,warp. scenario: steps array with safe actions snapshot, teleport, spawn_vehicle, wait, cleanup."}},"required":["action"],"additionalProperties":false}}},
       {"type":"function","function":{"name":"server_status","description":"Return the managed FXServer installation/running status.","parameters":{"type":"object","properties":{},"additionalProperties":false}}},
+      {"type":"function","function":{"name":"recent_logs","description":"Read the most recent bounded FXServer log lines for runtime diagnosis.","parameters":{"type":"object","properties":{"limit":{"type":"integer","minimum":1,"maximum":500}},"additionalProperties":false}}},
       {"type":"function","function":{"name":"nui_targets","description":"List CEF/NUI pages currently exposed by the running FiveM client's remote DevTools endpoint.","parameters":{"type":"object","properties":{},"additionalProperties":false}}}
     ]);
 
