@@ -72,8 +72,31 @@ async fn execute_tool(app: &AppHandle, manager: &FxServerManager, workspace_path
             Ok(json!({"ok": true, "resource": resource}).to_string())
         }
         "run_ingame_test" => {
-            let action = args.get("action").and_then(Value::as_str).ok_or_else(|| AppError::InvalidInput("run_ingame_test.action is required".into()))?;
-            Ok(fxserver::run_ingame_test(manager, action).await?.to_string())
+            let action = args
+                .get("action")
+                .and_then(Value::as_str)
+                .ok_or_else(|| AppError::InvalidInput("run_ingame_test.action is required".into()))?;
+            let scenario_args = args
+                .get("args")
+                .cloned()
+                .unwrap_or_else(|| json!({}));
+
+            if action == "screenshot" {
+                let evidence = fxserver::capture_screenshot(manager, workspace_path).await?;
+                return Ok(json!({
+                    "ok": true,
+                    "action": "screenshot",
+                    "path": evidence.path,
+                    "size": evidence.size,
+                    "sha256": evidence.sha256,
+                    "mime": evidence.mime
+                })
+                .to_string());
+            }
+
+            Ok(fxserver::run_bridge_test(manager, action, scenario_args)
+                .await?
+                .to_string())
         }
         "server_status" => Ok(serde_json::to_string(&fxserver::status(app, Some(manager)).await?)?),
         "nui_targets" => Ok(trim_tool_output(serde_json::to_string(&nui::targets().await?)?)),
@@ -98,7 +121,7 @@ pub async fn run(app: AppHandle, manager: Arc<FxServerManager>, request: AgentRe
       {"type":"function","function":{"name":"write_file","description":"Create or replace a UTF-8 source file inside the workspace. Paths cannot escape the workspace.","parameters":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"],"additionalProperties":false}}},
       {"type":"function","function":{"name":"refresh_resources","description":"Ask FXServer to rescan resource manifests.","parameters":{"type":"object","properties":{},"additionalProperties":false}}},
       {"type":"function","function":{"name":"restart_resource","description":"Restart one FiveM resource after editing it.","parameters":{"type":"object","properties":{"resource":{"type":"string"}},"required":["resource"],"additionalProperties":false}}},
-      {"type":"function","function":{"name":"run_ingame_test","description":"Run a real test through the connected FiveM client and sdkai_bridge. Use ping for connectivity or snapshot for player/game state.","parameters":{"type":"object","properties":{"action":{"type":"string","enum":["ping","snapshot"]}},"required":["action"],"additionalProperties":false}}},
+      {"type":"function","function":{"name":"run_ingame_test","description":"Run a real test through the authenticated sdkai_bridge and connected FiveM client. Supports connectivity, player snapshots, teleport validation, vehicle spawning, cleanup, and screenshots. Use args for action-specific data.","parameters":{"type":"object","properties":{"action":{"type":"string","enum":["ping","snapshot","teleport","spawn_vehicle","cleanup","screenshot"]},"args":{"type":"object","description":"Action arguments. teleport: x,y,z,heading. spawn_vehicle: model,warp."}},"required":["action"],"additionalProperties":false}}},
       {"type":"function","function":{"name":"server_status","description":"Return the managed FXServer installation/running status.","parameters":{"type":"object","properties":{},"additionalProperties":false}}},
       {"type":"function","function":{"name":"nui_targets","description":"List CEF/NUI pages currently exposed by the running FiveM client's remote DevTools endpoint.","parameters":{"type":"object","properties":{},"additionalProperties":false}}}
     ]);
@@ -110,7 +133,9 @@ Rules:
 - Respect client/server runtime boundaries. Network only events that truly cross boundaries; never trust money, permissions, inventory, coordinates or authorization supplied by a client when the server can verify them.
 - NUI callbacks must always return a response. Keep JSON payloads bounded and validate input.
 - After source changes, refresh/restart the smallest affected resource.
-- If the user asks to test, use run_ingame_test whenever a FiveM client is connected. Do not claim an in-game test passed unless that tool returned a successful test_result.
+- If the user asks to test, use run_ingame_test whenever a FiveM client is connected. Prefer a scenario that exercises the changed behavior, then capture screenshot evidence for visual changes. Do not claim an in-game test passed unless the tool returned ok=true.
+- Use teleport/spawn_vehicle only for local deterministic test setup, and always call cleanup after entities created by a test.
+- Use nui_targets to verify that NUI/CEF pages are actually loaded when working on UI resources.
 - Do not modify files outside the workspace and do not invent successful runtime results.
 Return a concise engineering summary including files changed, tests actually executed, failures still present, and next concrete step."#;
 
