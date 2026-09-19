@@ -1,3 +1,4 @@
+use rand::RngCore;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -66,6 +67,7 @@ pub struct FxServerManager {
     process: Mutex<Option<RunningServer>>,
     logs: Mutex<VecDeque<StoredLog>>,
     sequence: AtomicU64,
+    bridge_token: Mutex<Option<String>>,
 }
 
 impl Default for FxServerManager {
@@ -74,6 +76,7 @@ impl Default for FxServerManager {
             process: Mutex::new(None),
             logs: Mutex::new(VecDeque::with_capacity(MAX_LOG_LINES)),
             sequence: AtomicU64::new(0),
+            bridge_token: Mutex::new(None),
         }
     }
 }
@@ -272,14 +275,19 @@ sv_maxclients 4
     Ok(())
 }
 
-fn runtime_cfg(workspace_root: &Path, license_key: &str) -> AppResult<PathBuf> {
+fn runtime_cfg(workspace_root: &Path, license_key: &str, bridge_token: &str) -> AppResult<PathBuf> {
     if license_key.is_empty() || license_key.len() > 512 || license_key.chars().any(|ch| matches!(ch, '\n' | '\r' | '"')) {
         return Err(AppError::InvalidInput("invalid Cfx.re license key".into()));
     }
     let dir = workspace_root.join(".sdkai");
     fs::create_dir_all(&dir)?;
     let cfg = dir.join("runtime.cfg");
-    fs::write(&cfg, format!("exec server.cfg\nsv_master1 \"\"\nset onesync on\nsv_maxclients 4\nsv_licenseKey \"{license_key}\"\nensure sdkai_bridge\n"))?;
+    fs::write(
+        &cfg,
+        format!(
+            "exec server.cfg\nsv_master1 \"\"\nset onesync on\nsv_maxclients 4\nsv_licenseKey \"{license_key}\"\nset sdkai_token \"{bridge_token}\"\nensure sdkai_bridge\n"
+        ),
+    )?;
     Ok(cfg)
 }
 
@@ -294,7 +302,10 @@ pub async fn start(app: AppHandle, manager: Arc<FxServerManager>, workspace_path
     if !root.join("server.cfg").is_file() {
         return Err(AppError::InvalidInput("server.cfg not found; use Prepare first".into()));
     }
-    let cfg = runtime_cfg(&root, license_key)?;
+    let mut token_bytes = [0u8; 32];
+    rand::rng().fill_bytes(&mut token_bytes);
+    let bridge_token = hex::encode(token_bytes);
+    let cfg = runtime_cfg(&root, license_key, &bridge_token)?;
     let cfg_relative = cfg.strip_prefix(&root).map_err(|_| AppError::Process("runtime cfg escaped workspace".into()))?;
 
     let mut process_lock = manager.process.lock().await;
@@ -314,6 +325,7 @@ pub async fn start(app: AppHandle, manager: Arc<FxServerManager>, workspace_path
 
     *process_lock = Some(RunningServer { child, stdin });
     drop(process_lock);
+    *manager.bridge_token.lock().await = Some(bridge_token);
 
     {
         let app = app.clone();
@@ -347,6 +359,7 @@ pub async fn stop(app: &AppHandle, manager: &FxServerManager) -> AppResult<()> {
         let _ = running.child.wait().await;
         manager.push_log(app, "system", "FXServer stopped".into()).await;
     }
+    *manager.bridge_token.lock().await = None;
     Ok(())
 }
 
@@ -398,6 +411,50 @@ pub async fn run_ingame_test(manager: &FxServerManager, action: &str) -> AppResu
         sleep(Duration::from_millis(120)).await;
     }
     Err(AppError::Process(format!("in-game test '{action}' timed out")))
+}
+
+pub async fn run_bridge_test(
+    manager: &FxServerManager,
+    action: &str,
+    args: Value,
+) -> AppResult<Value> {
+    if !matches!(
+        action,
+        "ping" | "snapshot" | "teleport" | "spawn_vehicle" | "cleanup" | "nui_state" | "screenshot"
+    ) {
+        return Err(AppError::InvalidInput(format!(
+            "unsupported bridge action: {action}"
+        )));
+    }
+
+    let encoded_args = serde_json::to_vec(&args)?;
+    if encoded_args.len() > 16 * 1024 {
+        return Err(AppError::InvalidInput(
+            "bridge test arguments exceed 16 KiB".into(),
+        ));
+    }
+
+    let token = manager
+        .bridge_token
+        .lock()
+        .await
+        .clone()
+        .ok_or_else(|| AppError::Process("FXServer bridge token is unavailable".into()))?;
+
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(3))
+        .timeout(Duration::from_secs(25))
+        .build()?;
+
+    let response = client
+        .post("http://127.0.0.1:30120/sdkai_bridge/test")
+        .header("x-sdkai-token", token)
+        .json(&serde_json::json!({ "action": action, "args": args }))
+        .send()
+        .await?
+        .error_for_status()?;
+
+    Ok(response.json().await?)
 }
 
 pub async fn status(app: &AppHandle, manager: Option<&FxServerManager>) -> AppResult<FxServerStatus> {
