@@ -2,6 +2,7 @@ import Editor from '@monaco-editor/react';
 import { listen } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
 import { useEffect, useMemo, useState } from 'react';
+import { configureMonaco } from './monacoSetup';
 import { api, type FxServerStatus, type NuiTarget, type ScreenshotEvidence, type WorkspaceFile } from './api';
 
 type LogEvent = { stream: 'stdout' | 'stderr' | 'system'; line: string };
@@ -159,6 +160,7 @@ export default function App() {
           <div className="tabs"><span>{activePath || 'Abra um arquivo'}</span>{dirty && <span className="dirty">●</span>}<button disabled={!dirty} onClick={() => void save()}>Salvar</button></div>
           <Editor
             height="100%"
+            beforeMount={configureMonaco}
             theme="vs-dark"
             language={language}
             value={content}
