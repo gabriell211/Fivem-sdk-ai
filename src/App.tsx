@@ -2,7 +2,7 @@ import Editor from '@monaco-editor/react';
 import { listen } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
 import { useEffect, useMemo, useState } from 'react';
-import { api, type FxServerStatus, type WorkspaceFile } from './api';
+import { api, type FxServerStatus, type NuiTarget, type WorkspaceFile } from './api';
 
 type LogEvent = { stream: 'stdout' | 'stderr' | 'system'; line: string };
 
@@ -33,6 +33,7 @@ export default function App() {
   const [model, setModel] = useState('qwen3-coder:latest');
   const [apiKey, setApiKey] = useState('');
   const [busy, setBusy] = useState(false);
+  const [nuiTargets, setNuiTargets] = useState<NuiTarget[]>([]);
 
   const language = useMemo(() => languageFor(activePath), [activePath]);
 
@@ -87,6 +88,14 @@ export default function App() {
     }
   };
 
+  const refreshNui = () => withBusy(async () => {
+    const targets = await api.nuiTargets();
+    setNuiTargets(targets);
+    setAgentResult(targets.length
+      ? `NUI/CEF: ${targets.length} target(s) detectado(s).\n${targets.map((target) => `- ${target.title || '(sem título)'} — ${target.url}`).join('\n')}`
+      : 'Nenhum target NUI/CEF detectado. Abra o FiveM e um resource com NUI.');
+  });
+
   const runAgent = () => withBusy(async () => {
     if (!workspace) throw new Error('Abra um workspace primeiro.');
     const result = await api.runAgent({ workspace, prompt: agentPrompt, endpoint, model, apiKey: apiKey || undefined });
@@ -139,7 +148,19 @@ export default function App() {
           <div className="test-actions">
             <button disabled={!status.running} onClick={() => void api.serverCommand('sdkai_ping')}>Ping in-game</button>
             <button disabled={!status.running} onClick={() => void api.serverCommand('sdkai_snapshot')}>Snapshot player</button>
+            <button disabled={!status.running || busy} onClick={() => void refreshNui()}>Detectar NUI</button>
+            <button disabled={!status.running} onClick={() => void api.openNuiDevtools()}>NUI DevTools</button>
           </div>
+          {nuiTargets.length > 0 && (
+            <div className="nui-targets">
+              {nuiTargets.slice(0, 8).map((target) => (
+                <div key={target.id || target.url} title={target.url}>
+                  <strong>{target.title || target.targetType || 'CEF target'}</strong>
+                  <span>{target.url}</span>
+                </div>
+              ))}
+            </div>
+          )}
           <pre className="agent-result">{agentResult || 'A resposta e os testes da IA aparecem aqui.'}</pre>
         </aside>
 
