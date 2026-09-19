@@ -474,7 +474,7 @@ pub async fn run_bridge_test(
 ) -> AppResult<Value> {
     if !matches!(
         action,
-        "ping" | "snapshot" | "teleport" | "spawn_vehicle" | "cleanup" | "nui_state" | "screenshot"
+        "ping" | "snapshot" | "teleport" | "spawn_vehicle" | "cleanup" | "screenshot"
     ) {
         return Err(AppError::InvalidInput(format!(
             "unsupported bridge action: {action}"
