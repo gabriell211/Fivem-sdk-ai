@@ -112,7 +112,24 @@ impl FxServerManager {
     }
 
     async fn lines_after(&self, seq: u64) -> Vec<StoredLog> {
-        self.logs.lock().await.iter().filter(|line| line.seq > seq).cloned().collect()
+        self.logs
+            .lock()
+            .await
+            .iter()
+            .filter(|line| line.seq > seq)
+            .cloned()
+            .collect()
+    }
+
+    pub async fn recent_logs(&self, limit: usize) -> Vec<Value> {
+        let logs = self.logs.lock().await;
+        let take = limit.clamp(1, 500);
+        logs.iter()
+            .rev()
+            .take(take)
+            .rev()
+            .map(|item| serde_json::json!({ "seq": item.seq, "line": item.line }))
+            .collect()
     }
 }
 
