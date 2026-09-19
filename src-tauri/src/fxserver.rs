@@ -28,6 +28,8 @@ use crate::{bridge, workspace, AppError, AppResult};
 
 const ARTIFACT_INDEX: &str = "https://runtime.fivem.net/artifacts/fivem/build_server_windows/master/";
 const SERVER_DATA_ZIP: &str = "https://github.com/citizenfx/cfx-server-data/archive/refs/heads/master.zip";
+const SCREENSHOT_BASIC_ZIP: &str =
+    "https://github.com/citizenfx/screenshot-basic/archive/refs/heads/master.zip";
 const MAX_LOG_LINES: usize = 4_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -240,12 +242,50 @@ fn copy_server_data(bytes: &[u8], workspace_root: &Path) -> AppResult<()> {
     Ok(())
 }
 
+
+fn copy_repository_root(bytes: &[u8], destination: &Path) -> AppResult<()> {
+    let mut archive = ZipArchive::new(Cursor::new(bytes))?;
+    fs::create_dir_all(destination)?;
+    for index in 0..archive.len() {
+        let mut file = archive.by_index(index)?;
+        let Some(path) = file.enclosed_name().map(Path::to_path_buf) else {
+            continue;
+        };
+        let mut components = path.components();
+        let _archive_root = components.next();
+        let relative: PathBuf = components.collect();
+        if relative.as_os_str().is_empty() {
+            continue;
+        }
+        let output = destination.join(relative);
+        if file.is_dir() {
+            fs::create_dir_all(&output)?;
+        } else {
+            if let Some(parent) = output.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            let mut out = fs::File::create(output)?;
+            std::io::copy(&mut file, &mut out)?;
+        }
+    }
+    Ok(())
+}
+
 pub async fn bootstrap_workspace(workspace_path: &str) -> AppResult<()> {
     let root = workspace::root(workspace_path)?;
     let client = reqwest::Client::builder().user_agent("FiveM-SDK-AI/0.1").build()?;
     let url = Url::parse(SERVER_DATA_ZIP)?;
     let bytes = download(&client, &url).await?;
     copy_server_data(&bytes, &root)?;
+
+    let screenshot_url = Url::parse(SCREENSHOT_BASIC_ZIP)?;
+    let screenshot_bytes = download(&client, &screenshot_url).await?;
+    let screenshot_resource = root
+        .join("resources")
+        .join("[sdk-ai]")
+        .join("screenshot-basic");
+    copy_repository_root(&screenshot_bytes, &screenshot_resource)?;
+
     bridge::install(workspace_path)?;
 
     let server_cfg = root.join("server.cfg");
@@ -260,6 +300,7 @@ ensure sessionmanager
 ensure basic-gamemode
 ensure hardcap
 ensure rconlog
+ensure screenshot-basic
 ensure sdkai_bridge
 
 sv_scriptHookAllowed 0
@@ -281,11 +322,12 @@ fn runtime_cfg(workspace_root: &Path, license_key: &str, bridge_token: &str) -> 
     }
     let dir = workspace_root.join(".sdkai");
     fs::create_dir_all(&dir)?;
+    fs::create_dir_all(dir.join("screenshots"))?;
     let cfg = dir.join("runtime.cfg");
     fs::write(
         &cfg,
         format!(
-            "exec server.cfg\nsv_master1 \"\"\nset onesync on\nsv_maxclients 4\nsv_licenseKey \"{license_key}\"\nset sdkai_token \"{bridge_token}\"\nensure sdkai_bridge\n"
+            "exec server.cfg\nsv_master1 \"\"\nset onesync on\nsv_maxclients 4\nsv_licenseKey \"{license_key}\"\nset sdkai_token \"{bridge_token}\"\nensure screenshot-basic\nensure sdkai_bridge\n"
         ),
     )?;
     Ok(cfg)
