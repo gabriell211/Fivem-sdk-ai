@@ -127,6 +127,54 @@ local function cleanup()
     return { ok = true, action = 'cleanup', removed = removed, snapshot = safeSnapshot() }
 end
 
+local function runScenario(args)
+    local steps = args and args.steps
+    if type(steps) ~= 'table' or #steps < 1 or #steps > 24 then
+        return { ok = false, action = 'scenario', error = 'scenario requires 1-24 steps' }
+    end
+
+    local results = {}
+    for index, step in ipairs(steps) do
+        if type(step) ~= 'table' or type(step.action) ~= 'string' then
+            return { ok = false, action = 'scenario', failedStep = index, error = 'invalid step' }
+        end
+
+        local result
+        if step.action == 'snapshot' then
+            result = { ok = true, action = 'snapshot', snapshot = safeSnapshot() }
+        elseif step.action == 'teleport' then
+            result = teleport(step.args or {})
+        elseif step.action == 'spawn_vehicle' then
+            result = spawnVehicle(step.args or {})
+        elseif step.action == 'cleanup' then
+            result = cleanup()
+        elseif step.action == 'wait' then
+            local ms = step.args and step.args.ms or 250
+            if type(ms) ~= 'number' or ms < 0 or ms > 5000 then
+                result = { ok = false, action = 'wait', error = 'wait must be 0-5000 ms' }
+            else
+                Wait(math.floor(ms))
+                result = { ok = true, action = 'wait', ms = math.floor(ms) }
+            end
+        else
+            result = { ok = false, action = step.action, error = 'unsupported scenario step' }
+        end
+
+        results[#results + 1] = result
+        if result.ok ~= true then
+            return {
+                ok = false,
+                action = 'scenario',
+                failedStep = index,
+                error = result.error or 'step failed',
+                steps = results
+            }
+        end
+    end
+
+    return { ok = true, action = 'scenario', steps = results, snapshot = safeSnapshot() }
+end
+
 RegisterNetEvent('sdkai:request', function(requestId, action, args)
     if source ~= 65535 then return end
     if type(requestId) ~= 'string' or type(action) ~= 'string' then return end
@@ -143,6 +191,8 @@ RegisterNetEvent('sdkai:request', function(requestId, action, args)
         payload = spawnVehicle(args or {})
     elseif action == 'cleanup' then
         payload = cleanup()
+    elseif action == 'scenario' then
+        payload = runScenario(args or {})
     else
         payload = { ok = false, action = action, error = 'unsupported client action' }
     end
@@ -272,6 +322,7 @@ local function handleTest(payload, response)
         and action ~= 'teleport'
         and action ~= 'spawn_vehicle'
         and action ~= 'cleanup'
+        and action ~= 'scenario'
     then
         sendJson(response, 400, { ok = false, action = action, error = 'unsupported action' })
         return
