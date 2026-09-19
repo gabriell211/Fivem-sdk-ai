@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tauri::AppHandle;
 use url::Url;
 
-use crate::{fxserver::{self, FxServerManager}, workspace, AppError, AppResult};
+use crate::{fxserver::{self, FxServerManager}, nui, workspace, AppError, AppResult};
 
 const MAX_AGENT_STEPS: usize = 12;
 const MAX_TOOL_TEXT: usize = 120_000;
@@ -76,6 +76,7 @@ async fn execute_tool(app: &AppHandle, manager: &FxServerManager, workspace_path
             Ok(fxserver::run_ingame_test(manager, action).await?.to_string())
         }
         "server_status" => Ok(serde_json::to_string(&fxserver::status(app, Some(manager)).await?)?),
+        "nui_targets" => Ok(trim_tool_output(serde_json::to_string(&nui::targets().await?)?)),
         _ => Err(AppError::InvalidInput(format!("unknown AI tool: {name}"))),
     }
 }
@@ -98,7 +99,8 @@ pub async fn run(app: AppHandle, manager: Arc<FxServerManager>, request: AgentRe
       {"type":"function","function":{"name":"refresh_resources","description":"Ask FXServer to rescan resource manifests.","parameters":{"type":"object","properties":{},"additionalProperties":false}}},
       {"type":"function","function":{"name":"restart_resource","description":"Restart one FiveM resource after editing it.","parameters":{"type":"object","properties":{"resource":{"type":"string"}},"required":["resource"],"additionalProperties":false}}},
       {"type":"function","function":{"name":"run_ingame_test","description":"Run a real test through the connected FiveM client and sdkai_bridge. Use ping for connectivity or snapshot for player/game state.","parameters":{"type":"object","properties":{"action":{"type":"string","enum":["ping","snapshot"]}},"required":["action"],"additionalProperties":false}}},
-      {"type":"function","function":{"name":"server_status","description":"Return the managed FXServer installation/running status.","parameters":{"type":"object","properties":{},"additionalProperties":false}}}
+      {"type":"function","function":{"name":"server_status","description":"Return the managed FXServer installation/running status.","parameters":{"type":"object","properties":{},"additionalProperties":false}}},
+      {"type":"function","function":{"name":"nui_targets","description":"List CEF/NUI pages currently exposed by the running FiveM client's remote DevTools endpoint.","parameters":{"type":"object","properties":{},"additionalProperties":false}}}
     ]);
 
     let system = r#"You are the coding and test engine inside FiveM SDK AI. Work only through the provided typed tools; there is no shell tool.
