@@ -1,6 +1,7 @@
 mod agent;
 mod bridge;
 mod fxserver;
+mod nui;
 mod workspace;
 
 use std::sync::Arc;
@@ -65,13 +66,27 @@ async fn install_fxserver(app: AppHandle) -> Result<fxserver::FxServerStatus, St
 }
 
 #[tauri::command]
-async fn fxserver_status(app: AppHandle, state: State<'_, AppState>) -> Result<fxserver::FxServerStatus, String> {
+async fn fxserver_status(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<fxserver::FxServerStatus, String> {
     as_command(fxserver::status(&app, Some(&state.fxserver)).await)
 }
 
 #[tauri::command]
-async fn start_fxserver(app: AppHandle, state: State<'_, AppState>, workspace: String, license_key: String) -> Result<(), String> {
-    as_command(fxserver::start(app, state.fxserver.clone(), &workspace, &license_key).await)
+async fn start_fxserver(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    workspace: String,
+    license_key: String,
+) -> Result<(), String> {
+    as_command(fxserver::start(
+        app,
+        state.fxserver.clone(),
+        &workspace,
+        &license_key,
+    )
+    .await)
 }
 
 #[tauri::command]
@@ -90,7 +105,21 @@ fn connect_fivem() -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn run_agent(app: AppHandle, state: State<'_, AppState>, request: agent::AgentRequest) -> Result<String, String> {
+async fn nui_targets() -> Result<Vec<nui::NuiTarget>, String> {
+    as_command(nui::targets().await)
+}
+
+#[tauri::command]
+fn open_nui_devtools() -> Result<(), String> {
+    as_command(nui::open_devtools())
+}
+
+#[tauri::command]
+async fn run_agent(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    request: agent::AgentRequest,
+) -> Result<String, String> {
     as_command(agent::run(app, state.fxserver.clone(), request).await)
 }
 
@@ -98,7 +127,9 @@ async fn run_agent(app: AppHandle, state: State<'_, AppState>, request: agent::A
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .manage(AppState { fxserver: Arc::new(fxserver::FxServerManager::default()) })
+        .manage(AppState {
+            fxserver: Arc::new(fxserver::FxServerManager::default()),
+        })
         .invoke_handler(tauri::generate_handler![
             list_workspace_files,
             read_workspace_file,
@@ -110,6 +141,8 @@ pub fn run() {
             stop_fxserver,
             fxserver_command,
             connect_fivem,
+            nui_targets,
+            open_nui_devtools,
             run_agent,
         ])
         .run(tauri::generate_context!())
