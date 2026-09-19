@@ -2,24 +2,28 @@
 
 AI-first desktop IDE for FiveM resource development. The IDE owns a managed local FXServer, exposes a Monaco-based editor, streams server logs, and gives the AI a narrow set of typed tools so it can edit resources, restart them and request evidence from a real connected FiveM client.
 
-> v0.1 is the architecture foundation. It intentionally refuses to call a change "tested in game" unless the local bridge returns evidence from a connected FiveM client.
+> The IDE intentionally refuses to call a change "tested in game" unless the local bridge returns evidence from a connected FiveM client. CI validates the desktop code, while GTA/FiveM runtime evidence is produced only on a real local client.
 
 ## Implemented
 
 - Tauri 2 desktop shell with a Rust core.
-- React 19 + Monaco editor.
+- React 19 + Monaco editor with a registered Lua grammar, FiveM completions and safe snippets.
 - Workspace explorer with path traversal and symlink-escape protection.
 - Managed FXServer installer using Cfx.re's **LATEST RECOMMENDED** Windows artifact.
 - Runtime downloads the exact official `server.7z`; FXServer binaries are never committed to this repository.
-- Bootstrap of the upstream `cfx-server-data` resources.
+- Bootstrap of upstream `cfx-server-data` plus the official `screenshot-basic` resource.
 - Local development `server.cfg` plus an isolated runtime config for the Cfx.re license key.
 - Start/stop/connect controls and streamed FXServer stdout/stderr.
 - Strict FXServer command allowlist: resource lifecycle, status and SDK test commands only.
-- Generated `resources/[sdk-ai]/sdkai_bridge` FiveM resource.
-- Real client test handshake for `ping` and player-state `snapshot`.
+- Generated `resources/[sdk-ai]/sdkai_bridge` FiveM resource with an authenticated loopback-only HTTP test API.
+- Real client tests for `ping`, player `snapshot`, teleport validation, vehicle spawn, cleanup and bounded multi-step scenarios.
+- Screenshot evidence through `screenshot-basic`, validated to remain inside `.sdkai/screenshots`, capped at 10 MiB and hashed with SHA-256.
+- FiveM NUI/CEF target discovery through the documented remote DevTools endpoint on `127.0.0.1:13172`.
+- In-app NUI DevTools launcher and screenshot preview.
 - OpenAI-compatible tool-calling provider adapter. Default UI points to a localhost endpoint.
 - AI has no generic PowerShell/cmd/shell tool.
-- Windows GitHub Actions job for web build, Rust fmt, tests and clippy.
+- Windows GitHub Actions job for web build, Rust formatting, tests and clippy.
+- Release workflow that builds Windows MSI/NSIS installers on tags or manual dispatch.
 
 ## Architecture
 
@@ -33,15 +37,17 @@ Rust desktop core
   |-- typed AI tool runtime
   |-- FXServer process manager
   |-- official artifact installer/cache
-  `-- structured log/test collector
+  |-- structured log/test collector
+  |-- NUI DevTools discovery
+  `-- screenshot evidence validator
                 |
-         FXServer stdin/stdout
+     loopback HTTP + FXServer logs
                 |
  resources/[sdk-ai]/sdkai_bridge
        |                    |
    server.lua  <------>  client.lua
-                            |
-                    real FiveM client
+       |                    |
+ screenshot-basic       real FiveM client
 ```
 
 The AI tool surface currently contains:
@@ -53,19 +59,27 @@ The AI tool surface currently contains:
 - `restart_resource`
 - `run_ingame_test`
 - `server_status`
+- `nui_targets`
 
-There is deliberately no arbitrary process execution tool.
+`run_ingame_test` supports structured arguments and the actions `ping`, `snapshot`, `teleport`, `spawn_vehicle`, `cleanup`, `scenario` and `screenshot`. There is deliberately no arbitrary process execution tool.
 
 ## Real in-game tests
 
-The IDE sends a restricted SDK command to FXServer. The bridge picks an actually connected player and sends a narrow network event with a generated request ID. Client-side code executes inside FiveM and returns a bounded result. The server accepts the result only from the exact player that received the request, then emits a structured `[SDKAI_EVENT]` record to stdout. Rust waits for that matching record before the AI can claim that the in-game check passed.
+At FXServer startup the Rust core generates a 256-bit token and passes it to the private development bridge through the ignored runtime config. FXServer is bound to `127.0.0.1:30120`; the bridge HTTP handler additionally checks loopback origin and the token before accepting a typed test request.
 
-Current test actions:
+For client-side actions the bridge selects a connected player, creates a request ID and sends only the known action plus bounded JSON arguments. A result is accepted only from the exact player assigned to that request. Replays fail because a request is removed after completion, and stale requests time out.
 
-- `ping`: verifies the complete IDE -> FXServer -> server resource -> real client -> server -> IDE path.
-- `snapshot`: returns player/server IDs, ped/model, health, armour, coordinates, heading, interior, vehicle, zone and game timer.
+Current actions:
 
-This is transport/runtime evidence, not a claim that every gameplay behavior is correct. Scenario-specific assertions are the next layer.
+- `ping`: proves IDE -> HTTP bridge -> server resource -> real client -> server -> IDE connectivity.
+- `snapshot`: returns ped/model, health, armour, coordinates, heading, interior, vehicle, zone and game timer.
+- `teleport`: validates bounded coordinates, teleports the local test player and returns the resulting snapshot.
+- `spawn_vehicle`: validates a model name, loads it with a timeout, spawns a tracked test vehicle and returns entity/network evidence.
+- `cleanup`: removes vehicles created by the bridge.
+- `scenario`: executes 1-24 safe steps (`snapshot`, `teleport`, `spawn_vehicle`, `wait`, `cleanup`) and reports the exact failed step.
+- `screenshot`: asks official `screenshot-basic` for a client render capture, then Rust canonicalizes the returned path, checks size, hashes it and exposes a preview in the IDE.
+
+For NUI work the IDE also queries FiveM's remote CEF DevTools target list and can open the browser DevTools UI. This is evidence about what actually loaded in CEF; it is separate from server logs.
 
 ## Run locally
 
@@ -91,9 +105,9 @@ Workflow:
 4. Enter the Cfx.re license key.
 5. Start FXServer.
 6. Click **Entrar no jogo** to open `fivem://connect/127.0.0.1:30120`.
-7. Once a FiveM client is connected, run **Ping in-game**, **Snapshot player**, or let the AI invoke the same typed test tools.
+7. Once a FiveM client is connected, use **Ping**, **Snapshot**, **Screenshot**, teleport/spawn/cleanup controls, NUI discovery, or let the AI invoke the typed test/scenario tools.
 
-The key is written only to `.sdkai/runtime.cfg` in the local workspace at startup. `.sdkai/` is ignored by Git and excluded from the AI file listing.
+The Cfx.re key and per-run bridge token are written only to `.sdkai/runtime.cfg` in the local workspace. Screenshots also live under `.sdkai/`. That directory is ignored by Git and excluded from the AI workspace listing.
 
 ## Security model
 
@@ -107,6 +121,10 @@ The AI provider and connected game client are treated as untrusted inputs.
 - FXServer console operations are allowlisted.
 - `exec`, `quit`, arbitrary convar mutation and shell separators are not exposed to the AI.
 - In-game requests have generated IDs, timeout, payload bounds and expected-player binding.
+- The HTTP bridge is loopback-only, authenticated by a per-run 256-bit token and accepts only known actions.
+- Scenario execution is limited to 24 safe steps; waits and numeric coordinates are bounded.
+- Test-created vehicles are tracked for cleanup.
+- Screenshot paths are canonicalized beneath the managed evidence directory and size-limited before use.
 - The bridge only accepts known actions.
 - The system prompt forbids fabricated test success.
 
@@ -124,16 +142,8 @@ The AI provider and connected game client are treated as untrusted inputs.
 Research notes: [docs/FIVEM-RESEARCH.md](docs/FIVEM-RESEARCH.md)  
 Architecture and threat model: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 
-## Next milestones
+## Remaining advanced work
 
-- Direct screenshot capture from `screenshot-basic` to a localhost IDE HTTP receiver.
-- Visual assertions and before/after screenshot comparisons.
-- NUI/CEF console and network diagnostics.
-- Resource dependency graph from `fxmanifest.lua`.
-- Lua/JS/C# native/event intelligence.
-- `resmon`/profiler evidence.
-- Test DSL for spawn, teleport, entity, NUI and cleanup scenarios.
-- Multi-client/OneSync scenarios.
-- FXServer cached-build selector and rollback UI.
+The core edit -> run -> observe -> correct loop is implemented. The main areas that can still be expanded are deeper Chrome DevTools Protocol collection (console/network events instead of target discovery only), resource dependency graph visualization, profiler/resmon ingestion, multi-client OneSync scenarios and cached FXServer rollback selection.
 
 FiveM, Cfx.re and GTA V belong to their respective owners. This repository is an independent developer tool and downloads runtime components from upstream sources at user runtime.
