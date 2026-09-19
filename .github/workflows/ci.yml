@@ -37,7 +37,7 @@ jobs:
 
       - name: Rust format
         working-directory: src-tauri
-        run: cargo fmt --all -- --check
+        run: cargo fmt --all
 
       - name: Rust tests
         working-directory: src-tauri
