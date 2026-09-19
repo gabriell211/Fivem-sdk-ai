@@ -114,7 +114,7 @@ impl FxServerManager {
             .rev()
             .take(take)
             .rev()
-            .map(|item| serde_json::json!({ "seq": item.seq, "line": item.line }))
+            .map(|item| serde_json::json!({ "seq": item.seq, "line": item.line.clone() }))
             .collect()
     }
 }
