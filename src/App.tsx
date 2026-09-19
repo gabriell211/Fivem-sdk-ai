@@ -2,7 +2,7 @@ import Editor from '@monaco-editor/react';
 import { listen } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
 import { useEffect, useMemo, useState } from 'react';
-import { api, type FxServerStatus, type NuiTarget, type WorkspaceFile } from './api';
+import { api, type FxServerStatus, type NuiTarget, type ScreenshotEvidence, type WorkspaceFile } from './api';
 
 type LogEvent = { stream: 'stdout' | 'stderr' | 'system'; line: string };
 
@@ -34,6 +34,9 @@ export default function App() {
   const [apiKey, setApiKey] = useState('');
   const [busy, setBusy] = useState(false);
   const [nuiTargets, setNuiTargets] = useState<NuiTarget[]>([]);
+  const [screenshot, setScreenshot] = useState<ScreenshotEvidence | null>(null);
+  const [vehicleModel, setVehicleModel] = useState('adder');
+  const [teleportText, setTeleportText] = useState('-75.0, -818.0, 326.0, 180.0');
 
   const language = useMemo(() => languageFor(activePath), [activePath]);
 
@@ -87,6 +90,32 @@ export default function App() {
       await refreshStatus();
     }
   };
+
+  const runScenario = (action: string, args: Record<string, unknown> = {}) => withBusy(async () => {
+    const result = await api.runBridgeTest(action, args);
+    setAgentResult(JSON.stringify(result, null, 2));
+  });
+
+  const teleport = () => {
+    const values = teleportText.split(',').map((value) => Number(value.trim()));
+    if (values.length < 3 || values.slice(0, 3).some((value) => !Number.isFinite(value))) {
+      setAgentResult('Coordenadas inválidas. Use: x, y, z, heading');
+      return;
+    }
+    void runScenario('teleport', {
+      x: values[0],
+      y: values[1],
+      z: values[2],
+      ...(Number.isFinite(values[3]) ? { heading: values[3] } : {}),
+    });
+  };
+
+  const captureVisual = () => withBusy(async () => {
+    if (!workspace) throw new Error('Abra um workspace primeiro.');
+    const evidence = await api.captureScreenshot(workspace);
+    setScreenshot(evidence);
+    setAgentResult(`Screenshot validado: ${evidence.path}\nSHA-256: ${evidence.sha256}\n${evidence.size} bytes`);
+  });
 
   const refreshNui = () => withBusy(async () => {
     const targets = await api.nuiTargets();
@@ -146,11 +175,31 @@ export default function App() {
           <textarea value={agentPrompt} onChange={(e) => setAgentPrompt(e.target.value)} />
           <button className="primary" disabled={!workspace || busy} onClick={() => void runAgent()}>Executar agente</button>
           <div className="test-actions">
-            <button disabled={!status.running} onClick={() => void api.serverCommand('sdkai_ping')}>Ping in-game</button>
-            <button disabled={!status.running} onClick={() => void api.serverCommand('sdkai_snapshot')}>Snapshot player</button>
+            <button disabled={!status.running || busy} onClick={() => void runScenario('ping')}>Ping in-game</button>
+            <button disabled={!status.running || busy} onClick={() => void runScenario('snapshot')}>Snapshot player</button>
+            <button disabled={!status.running || busy} onClick={() => void captureVisual()}>Screenshot real</button>
             <button disabled={!status.running || busy} onClick={() => void refreshNui()}>Detectar NUI</button>
             <button disabled={!status.running} onClick={() => void api.openNuiDevtools()}>NUI DevTools</button>
           </div>
+          <div className="scenario-controls">
+            <label>Teleport (x, y, z, heading)
+              <input value={teleportText} onChange={(e) => setTeleportText(e.target.value)} />
+            </label>
+            <button disabled={!status.running || busy} onClick={teleport}>Teleportar e validar</button>
+            <label>Veículo de teste
+              <input value={vehicleModel} onChange={(e) => setVehicleModel(e.target.value)} />
+            </label>
+            <div className="scenario-buttons">
+              <button disabled={!status.running || busy || !vehicleModel.trim()} onClick={() => void runScenario('spawn_vehicle', { model: vehicleModel.trim(), warp: true })}>Spawn + entrar</button>
+              <button disabled={!status.running || busy} onClick={() => void runScenario('cleanup')}>Cleanup</button>
+            </div>
+          </div>
+          {screenshot && (
+            <figure className="screenshot-evidence">
+              <img src={screenshot.dataUrl} alt="Screenshot capturado do cliente FiveM em execução" />
+              <figcaption>{screenshot.path} · {Math.round(screenshot.size / 1024)} KiB</figcaption>
+            </figure>
+          )}
           {nuiTargets.length > 0 && (
             <div className="nui-targets">
               {nuiTargets.slice(0, 8).map((target) => (
