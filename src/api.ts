@@ -20,6 +20,14 @@ export interface NuiTarget {
   webSocketDebuggerUrl: string;
 }
 
+export interface ScreenshotEvidence {
+  path: string;
+  size: number;
+  sha256: string;
+  mime: string;
+  dataUrl: string;
+}
+
 export interface AgentRequest {
   workspace: string;
   prompt: string;
@@ -44,6 +52,10 @@ export const api = {
   stopServer: () => invoke<void>('stop_fxserver'),
   serverCommand: (command: string) => invoke<void>('fxserver_command', { command }),
   connectFiveM: () => invoke<void>('connect_fivem'),
+  runBridgeTest: (action: string, args: Record<string, unknown> = {}) =>
+    invoke<Record<string, unknown>>('run_bridge_test', { action, args }),
+  captureScreenshot: (workspace: string) =>
+    invoke<ScreenshotEvidence>('capture_screenshot', { workspace }),
   nuiTargets: () => invoke<NuiTarget[]>('nui_targets'),
   openNuiDevtools: () => invoke<void>('open_nui_devtools'),
   runAgent: (request: AgentRequest) => invoke<string>('run_agent', { request }),
