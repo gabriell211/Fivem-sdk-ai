@@ -105,6 +105,24 @@ fn connect_fivem() -> Result<(), String> {
 }
 
 #[tauri::command]
+async fn run_bridge_test(
+    state: State<'_, AppState>,
+    action: String,
+    args: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    as_command(fxserver::run_bridge_test(&state.fxserver, &action, args).await)
+}
+
+#[tauri::command]
+async fn capture_screenshot(
+    state: State<'_, AppState>,
+    workspace: String,
+) -> Result<fxserver::ScreenshotEvidence, String> {
+    as_command(fxserver::capture_screenshot(&state.fxserver, &workspace).await)
+}
+
+
+#[tauri::command]
 async fn nui_targets() -> Result<Vec<nui::NuiTarget>, String> {
     as_command(nui::targets().await)
 }
@@ -141,6 +159,8 @@ pub fn run() {
             stop_fxserver,
             fxserver_command,
             connect_fivem,
+            run_bridge_test,
+            capture_screenshot,
             nui_targets,
             open_nui_devtools,
             run_agent,
