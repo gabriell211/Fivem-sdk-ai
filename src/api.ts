@@ -12,6 +12,14 @@ export interface FxServerStatus {
   executable?: string | null;
 }
 
+export interface NuiTarget {
+  id: string;
+  title: string;
+  url: string;
+  targetType: string;
+  webSocketDebuggerUrl: string;
+}
+
 export interface AgentRequest {
   workspace: string;
   prompt: string;
@@ -36,5 +44,7 @@ export const api = {
   stopServer: () => invoke<void>('stop_fxserver'),
   serverCommand: (command: string) => invoke<void>('fxserver_command', { command }),
   connectFiveM: () => invoke<void>('connect_fivem'),
+  nuiTargets: () => invoke<NuiTarget[]>('nui_targets'),
+  openNuiDevtools: () => invoke<void>('open_nui_devtools'),
   runAgent: (request: AgentRequest) => invoke<string>('run_agent', { request }),
 };
