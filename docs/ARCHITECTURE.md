@@ -2,15 +2,17 @@
 
 ## Core invariant
 
-An AI-generated change is **not** considered game-tested merely because source code parses or FXServer starts. A game-level success claim requires evidence returned from a connected FiveM client.
+An AI-generated change is **not** considered game-tested merely because source code parses or FXServer starts. A game-level success claim requires evidence produced through the managed bridge and, for client behavior, a connected FiveM client.
 
-The desktop core owns four explicit boundaries: workspace I/O, FXServer lifecycle, AI tools, and game-test telemetry.
+The desktop core owns explicit boundaries for workspace I/O, FXServer lifecycle, AI tools, game-test telemetry, NUI diagnostics and screenshot evidence.
 
 ## Desktop layers
 
 ### React + Monaco
 
-The UI edits source text, selects a workspace, controls the managed runtime, displays server output and sends user intent to the Rust AI runner. It does not execute arbitrary child processes.
+The UI edits source text, selects a workspace, controls the managed runtime, displays server output and sends user intent to the Rust AI runner. Monaco is extended with a Lua language definition, common FiveM/Cfx completions and snippets for events, threads, NUI callbacks and manifests.
+
+The UI also exposes deterministic test controls for ping/snapshot, teleport, vehicle spawn/cleanup, screenshots and NUI target discovery.
 
 ### Workspace sandbox
 
@@ -36,32 +38,74 @@ Responsibilities:
 3. Extract with a pure-Rust 7z decoder.
 4. Locate `FXServer.exe` or `cfx-server.exe`.
 5. Cache builds under application-local data and persist the active build pointer.
-6. Bootstrap server-data resources into the workspace.
+6. Bootstrap Cfx server-data resources and official `screenshot-basic`.
 7. Spawn the server with piped stdin/stdout/stderr.
 8. Keep a bounded structured log ring.
 9. Accept only an explicit console-command allowlist.
-10. Wait for structured in-game evidence after a test dispatch.
+10. Generate a fresh 256-bit bridge token for every server start.
+11. Send structured tests through the authenticated loopback bridge.
+12. Canonicalize, size-limit and hash screenshot evidence before exposing it to the UI.
 
-The runtime config is generated in `.sdkai/runtime.cfg`. It executes the user's `server.cfg`, reapplies local-only development settings and adds the Cfx.re license key. The key is not exposed in the editor file list or to the AI.
+The runtime config is generated in `.sdkai/runtime.cfg`. It executes the user's `server.cfg`, reapplies local development settings, adds the Cfx.re license key and injects the per-run bridge token. `.sdkai` is excluded from editor/AI listing and Git.
 
 ### sdkai_bridge
 
 A normal FiveM resource containing `server.lua` and `client.lua`.
 
-Current commands:
+The primary automation transport is the resource HTTP handler at:
 
-- `sdkai_ping`
-- `sdkai_snapshot`
+```text
+http://127.0.0.1:30120/sdkai_bridge/test
+```
 
-A request picks a currently connected player, allocates a request ID and records the exact target. The client performs the known read-only action. The result is accepted only when request ID, target player and action match. Requests expire; result cadence and encoded payload size are bounded.
+FXServer itself is bound to loopback. The handler independently checks the request address and requires the per-run `x-sdkai-token`.
 
-Accepted evidence is emitted as one structured stdout record:
+For client-side actions a request selects one connected player, allocates a request ID and records that exact player. Only a result from that player can complete the request. Completed IDs are removed, so replayed responses cannot satisfy another call. Requests expire after 15 seconds and payloads are bounded.
+
+Implemented test actions:
+
+- `ping`
+- `snapshot`
+- `teleport`
+- `spawn_vehicle`
+- `cleanup`
+- `scenario`
+- `screenshot`
+
+`scenario` accepts 1-24 steps and only the safe operations `snapshot`, `teleport`, `spawn_vehicle`, `wait` and `cleanup`. Wait duration, coordinates, model names and payload sizes are bounded.
+
+Console commands `sdkai_ping` and `sdkai_snapshot` remain as manual/fallback diagnostics.
+
+Accepted activity is also emitted as structured stdout records:
 
 ```text
 [SDKAI_EVENT]{...json...}
 ```
 
-Rust only resolves the test call after observing the matching event emitted after its dispatch sequence point.
+### Screenshot evidence
+
+The official `screenshot-basic` server export requests a render capture from the selected real client and saves it directly beneath the workspace:
+
+```text
+.sdkai/screenshots/<request-id>.jpg
+```
+
+Raw screenshot base64 is never relayed through ordinary FiveM network events. When the bridge returns a screenshot path, Rust:
+
+1. canonicalizes `.sdkai/screenshots`;
+2. canonicalizes the returned file;
+3. rejects any target outside that directory;
+4. rejects empty or greater-than-10-MiB files;
+5. computes SHA-256;
+6. exposes the image data URL only to the local desktop UI.
+
+The AI tool result receives the evidence path/hash/size/mime rather than a giant base64 payload.
+
+### NUI / CEF diagnostics
+
+`nui.rs` queries FiveM's documented CEF DevTools target endpoint on `127.0.0.1:13172/json/list`. Targets are surfaced in the IDE and to the AI as structured metadata. The IDE can also open the full DevTools UI in the user's browser.
+
+This proves which CEF/NUI pages actually loaded. Deeper CDP console/network collection can be layered on the same endpoint without changing the trust boundary.
 
 ### AI tool loop
 
@@ -76,14 +120,14 @@ typed tool call
    |
 Rust validation
    |
-workspace / FXServer / in-game operation
+workspace / FXServer / bridge / NUI operation
    |
-bounded structured result
+bounded structured evidence
    |
 provider continues
 ```
 
-The loop and tool-output sizes are capped.
+The loop and tool-output sizes are capped. The system prompt forbids invented test success and tells the AI to prefer deterministic scenarios and cleanup.
 
 ## Command boundary
 
@@ -102,36 +146,19 @@ Newlines, shell-like separators and non-allowlisted commands are rejected. Opera
 
 ## Test guarantees
 
-A passing `ping` proves:
+A passing bridge `ping` proves:
 
 1. managed FXServer is alive;
 2. `sdkai_bridge` is running;
-3. a real FiveM client is connected;
-4. server-to-client event delivery worked;
-5. client Lua executed inside FiveM;
-6. client-to-server delivery worked;
-7. the server accepted the response from the expected player;
-8. the IDE observed the exact structured result after dispatch.
+3. loopback authentication succeeded;
+4. a real FiveM client is connected;
+5. server-to-client event delivery worked;
+6. client Lua executed inside FiveM;
+7. client-to-server delivery worked;
+8. the server accepted the response from the expected player;
+9. the IDE received the structured result.
 
-It does not prove an arbitrary gameplay feature is correct. Scenario-specific assertions will be layered above this transport.
-
-## Screenshot architecture
-
-Planned path:
-
-```text
-FiveM client / screenshot-basic
-          |
-   HTTP multipart upload
-          v
-127.0.0.1 random-port receiver owned by IDE
-          |
- type/size/hash validation
-          |
- vision/assertion tool
-```
-
-Raw image base64 should not be relayed through ordinary FXServer events.
+A passing scenario additionally proves each requested bridge step completed, but it does not magically prove unrelated gameplay logic. Tests should exercise the changed behavior and use snapshots/screenshots/NUI evidence appropriate to that feature.
 
 ## Threat model
 
@@ -140,7 +167,10 @@ Assume all of the following may be malformed:
 - AI provider output;
 - workspace content and resource paths;
 - FiveM client event payloads;
+- bridge HTTP bodies;
 - upstream archive paths;
+- screenshot paths/files;
+- NUI DevTools responses;
 - FXServer log text.
 
-v0.1 controls include canonical path checks, content bounds, strict console allowlisting, HTTPS/host checks for runtime downloads, archive path safety, typed test actions, exact-player request binding, payload bounds and timeouts.
+Controls include canonical path checks, content bounds, strict console allowlisting, HTTPS for upstream downloads, archive path safety, typed bridge actions, loopback binding, 256-bit per-run bridge authentication, exact-player request binding, request expiry, bounded scenarios, tracked test-entity cleanup and screenshot evidence validation.
